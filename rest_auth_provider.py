@@ -45,7 +45,10 @@ class RestAuthProvider(object):
 
     async def check_password(self, user_id, password):
         logger.info("Got password check for " + user_id)
-        data = {'username': user_id, 'password': password}
+        localpart = user_id.split(":", 1)[0][1:]
+        logger.info("User %s authenticated", localpart)
+
+        data = {'username': localpart, 'password': password}
         r = requests.post(self.endpoint + '/mdpauth/oauth/token', json=data)
         r.raise_for_status()
         r = r.json()
@@ -58,9 +61,6 @@ class RestAuthProvider(object):
         if not r["access_token"]:
             logger.info("User not authenticated")
             return False
-
-        localpart = user_id.split(":", 1)[0][1:]
-        logger.info("User %s authenticated", user_id)
 
         registration = False
         if not (await self.account_handler.check_user_exists(user_id)):
