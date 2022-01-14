@@ -19,6 +19,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
+import jwt
 import logging
 import requests
 import json
@@ -44,17 +45,17 @@ class RestAuthProvider(object):
 
     async def check_password(self, user_id, password):
         logger.info("Got password check for " + user_id)
-        data = {'user': {'id': user_id, 'password': password}}
-        r = requests.post(self.endpoint + '/_matrix-internal/identity/v1/check_credentials', json=data)
+        data = {'username': user_id, 'password': password}
+        r = requests.post(self.endpoint + '/mdpauth/oauth/token', json=data)
         r.raise_for_status()
         r = r.json()
-        if not r["auth"]:
+
+        if not r["access_token"]:
             reason = "Invalid JSON data returned from REST endpoint"
             logger.warning(reason)
             raise RuntimeError(reason)
 
-        auth = r["auth"]
-        if not auth["success"]:
+        if not r["access_token"]:
             logger.info("User not authenticated")
             return False
 
@@ -75,57 +76,18 @@ class RestAuthProvider(object):
         else:
             logger.info("User %s already exists, registration skipped", user_id)
 
-        if auth["profile"]:
+        if r["access_token"]:
             logger.info("Handling profile data")
-            profile = auth["profile"]
+            profile = jwt.decode(r["access_token"], options={"verify_signature": False})
 
             store = self.account_handler._hs.get_profile_handler().store
 
-            if "display_name" in profile and ((registration and self.config.setNameOnRegister) or (self.config.setNameOnLogin)):
-                display_name = profile["display_name"]
+            if "user_name" in profile and ((registration and self.config.setNameOnRegister) or (self.config.setNameOnLogin)):
+                display_name = profile["user_name"]
                 logger.info("Setting display name to '%s' based on profile data", display_name)
                 await store.set_profile_displayname(localpart, display_name)
             else:
                 logger.info("Display name was not set because it was not given or policy restricted it")
-
-            if (self.config.updateThreepid):
-                if "three_pids" in profile:
-                    logger.info("Handling 3PIDs")
-
-                    external_3pids = []
-                    for threepid in profile["three_pids"]:
-                        medium = threepid["medium"].lower()
-                        address = threepid["address"].lower()
-                        external_3pids.append({"medium": medium, "address": address})
-                        logger.info("Looking for 3PID %s:%s in user profile", medium, address)
-
-                        validated_at = time_msec()
-                        if not (await store.get_user_id_by_threepid(medium, address)):
-                            logger.info("3PID is not present, adding")
-                            await store.user_add_threepid(
-                                user_id,
-                                medium,
-                                address,
-                                validated_at,
-                                validated_at
-                            )
-                        else:
-                            logger.info("3PID is present, skipping")
-
-                    if (self.config.replaceThreepid):
-                        for threepid in (await store.user_get_threepids(user_id)):
-                            medium = threepid["medium"].lower()
-                            address = threepid["address"].lower()
-                            if {"medium": medium, "address": address} not in external_3pids:
-                                logger.info("3PID is not present in external datastore, deleting")
-                                await store.user_delete_threepid(
-                                    user_id,
-                                    medium,
-                                    address
-                                )
-
-            else:
-                logger.info("3PIDs were not updated due to policy")
         else:
             logger.info("No profile data")
 
